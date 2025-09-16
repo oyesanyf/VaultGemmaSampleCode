@@ -696,7 +696,11 @@ def train_model(
     # Load tokenizer
     print("\n2. Loading tokenizer...")
     base_model_id = "google/vaultgemma-1b"
-    tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=True)
+    # Prefer fast tokenizer; fall back to slow if conversion fails
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=True)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = 'right'
@@ -1003,8 +1007,10 @@ def train_model(
         if qa and 'question' in dataset.column_names and 'answer' in dataset.column_names:
             n = len(dataset)
             if n >= 10:
+                # If DP-SGD was enabled, unwrap Opacus' GradSampleModule for generation
+                model_for_eval = _unwrap_opacus(model) if 'dp_enabled' in locals() and dp_enabled else model
                 val_start = max(0, int(n * 0.9))
-                avg_f1, em, total = evaluate_qa_model(model, tokenizer, dataset, val_start, max_new_tokens=48)
+                avg_f1, em, total = evaluate_qa_model(model_for_eval, tokenizer, dataset, val_start, max_new_tokens=48)
                 if total > 0:
                     print(f"\n📈 Quick Eval on held-out {total} QA examples: F1={avg_f1:.3f}, EM={em:.3f}")
     except Exception as e:
@@ -1026,7 +1032,35 @@ def train_model(
             model = _unwrap_opacus(model)
         except Exception:
             pass
-    model.save_pretrained(adapter_path)
+    # Prefer skipping model card creation to avoid missing template errors
+    try:
+        model.save_pretrained(adapter_path, create_model_card=False)
+    except TypeError:
+        # Older PEFT may not support create_model_card. Try providing a local template.
+        try:
+            os.makedirs(os.path.dirname(os.path.join(adapter_path, "..")), exist_ok=True)
+        except Exception:
+            pass
+        local_tpl = os.path.join(os.getcwd(), "modelcard_template.md")
+        try:
+            with open(local_tpl, "w", encoding="utf-8") as f:
+                f.write("# Adapter Card\n\nThis adapter was saved locally. Model card generation was minimized.")
+        except Exception:
+            local_tpl = None
+        try:
+            if local_tpl:
+                model.save_pretrained(adapter_path, model_card_template_path=local_tpl)
+            else:
+                model.save_pretrained(adapter_path)
+        except FileNotFoundError as e:
+            print(f"WARNING: Model card template missing; saving adapter without card. Details: {e}")
+            # As a last resort, write a minimal README to the adapter dir
+            try:
+                os.makedirs(adapter_path, exist_ok=True)
+                with open(os.path.join(adapter_path, "README.md"), "w", encoding="utf-8") as f:
+                    f.write("Adapter saved. Model card generation skipped due to missing template.")
+            except Exception:
+                pass
     print(f"Model saved to: {adapter_path}")
     
     return adapter_path
@@ -1058,11 +1092,46 @@ def query_model(model_path=None, prompt: str | None = None, context_csv: str | N
         if not os.path.exists(model_path):
             print(f"Model path does not exist: {model_path}")
             return
+
+    # Normalize to absolute local path to avoid being treated as a Hub repo id
+    try:
+        model_path = os.path.abspath(model_path)
+    except Exception:
+        pass
+
+    # Validate adapter files exist locally
+    required_files = [
+        os.path.join(model_path, "adapter_config.json"),
+        os.path.join(model_path, "adapter_model.safetensors"),
+    ]
+    if not all(os.path.isfile(p) for p in required_files):
+        print("Adapter files not found at:")
+        print(f"  {model_path}")
+        print("Expected files:")
+        for p in required_files:
+            print(f"  - {os.path.basename(p)}")
+        # Try a known local example adapter directory as a fallback
+        fallback_dir = os.path.join(os.getcwd(), "phi-vaultgemma-finetuned-adapter-dp")
+        fb_files = [
+            os.path.join(fallback_dir, "adapter_config.json"),
+            os.path.join(fallback_dir, "adapter_model.safetensors"),
+        ]
+        if all(os.path.isfile(p) for p in fb_files):
+            print("Falling back to local adapter:")
+            print(f"  {fallback_dir}")
+            model_path = fallback_dir
+        else:
+            print("No valid adapter directory found. Re-run training or provide --model pointing to a directory containing the adapter files.")
+            return
     
     # Load model
     print("Loading model...")
     base_model_id = "google/vaultgemma-1b"
-    tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=True)
+    # Prefer fast tokenizer; fall back to slow if conversion fails
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=True)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     

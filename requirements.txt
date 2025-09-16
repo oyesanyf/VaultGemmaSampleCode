@@ -1,9 +1,12 @@
-# Python version requirement
-python_requires>=3.10,<3.12
-
 # Core ML and NLP libraries
+# Note: If you install Transformers from Hugging Face wheels, keep the extra-index below.
+# For CUDA 12.1 builds, uncomment the cu121 line; for CPU-only, you can use the cpu line.
 torch>=2.0.0,<2.5.0
-transformers>=4.40.0,<5.0.0
+# Install latest Transformers from source to support vaultgemma
+git+https://github.com/huggingface/transformers.git
+protobuf>=3.20.3,<5.0.0
+sentencepiece>=0.1.99,<0.2.0
+tiktoken>=0.5.0,<1.0.0
 datasets>=2.14.0,<3.0.0
 accelerate>=0.20.0,<1.0.0
 
