@@ -161,21 +161,31 @@ python LLM_Diffrential_Privacy.py --clean
 
 ```
 LLMEncrption2/
-├── data/                           # Generated data files
-│   ├── ORIGINAL_phi_data_*.csv    # Original sensitive data
-│   ├── DP_ENCRYPTED_phi_data_*.csv # Privacy-protected data
-│   └── QA_pairs_*.csv             # Question-answer pairs
-├── models/                         # Trained model adapters
-│   └── vaultgemma_dp_*/           # Timestamped model directories
-├── LLM_Diffrential_Privacy.py     # Main training script
-├── LLM_Diffrential_Privacy_fixed.py # Fixed version
-├── query_model.py                 # Simple query script
-├── hm.py                          # Helper utilities
-├── requirements.txt               # Python dependencies
-├── README.md                      # This file
-└── .github/                       # GitHub Actions workflows
-    └── workflows/
-        └── ci.yml
+├── data/                                 # Generated data files (gitignored)
+│   ├── ORIGINAL_phi_data_*.csv           # Original sensitive data
+│   ├── DP_ENCRYPTED_phi_data_*.csv       # Privacy-protected data
+│   └── QA_pairs_*.csv                    # Question-answer pairs
+├── models/                               # Trained model adapters (gitignored)
+│   └── vaultgemma_dp_*/                  # Timestamped model directories
+├── phi-vaultgemma-finetuned-adapter-dp/  # Example adapter assets (optional)
+├── LLM_Diffrential_Privacy.py            # Main training & CLI
+├── LLM_Diffrential_Privacy_fixed.py      # Alternate simplified trainer
+├── query_model.py                        # Simple query helper
+├── requirements.txt                      # Python dependencies
+├── setup.py                              # Packaging metadata (optional)
+├── README.md                             # This file
+├── LICENSE                               # Project license
+├── CHANGELOG.md                          # Release notes
+├── CONTRIBUTING.md                       # Contribution guidelines
+├── SECURITY.md                           # Security policy
+├── .gitignore                            # Ignore rules (venvs, data, models)
+└── .github/                              # GitHub metadata
+    ├── workflows/
+    │   └── ci.yml                        # CI pipeline
+    ├── ISSUE_TEMPLATE/
+    │   ├── bug_report.md
+    │   └── feature_request.md
+    └── pull_request_template.md
 ```
 
 ## 🔒 Privacy Guarantees
