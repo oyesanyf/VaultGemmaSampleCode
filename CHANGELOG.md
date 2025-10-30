@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Comprehensive GitHub documentation
+- CLI flags: `--lr`, `--gen-beams`, `--gen-max-new-tokens`
+- DP training guidance and recommended commands in README
+ - README section: DP-SGD tuned recommendation vs legacy example
 - CI/CD pipeline with GitHub Actions
 - Requirements.txt with Python version constraints
 - .gitignore for Python and ML projects
@@ -19,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Improved project structure and organization
 - Enhanced documentation and examples
+- DP-SGD defaults: DP-aware learning rate (1e-5) when `--dp-model` is used
+- Added guardrail warnings for unstable DP configs (batch/epochs/clip)
 
 ### Fixed
 - Code formatting and style consistency

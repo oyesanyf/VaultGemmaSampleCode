@@ -30,6 +30,8 @@ from peft import LoraConfig, get_peft_model, PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from torch.utils.data import DataLoader
 import numpy as np
+import time
+import stat
 
 # Progress bar (optional)
 try:
@@ -75,7 +77,7 @@ def compute_token_f1(pred: str, truth: str) -> float:
         return 0.0
     return 2 * precision * recall / (precision + recall)
 
-def evaluate_qa_model(model, tokenizer, dataset, val_start: int, max_new_tokens: int = 48):
+def evaluate_qa_model(model, tokenizer, dataset, val_start: int, max_new_tokens: int = 48, max_eval_samples: int = None):
     """Compute EM and token-F1 on a held-out slice of a QA dataset.
 
     Args:
@@ -84,6 +86,7 @@ def evaluate_qa_model(model, tokenizer, dataset, val_start: int, max_new_tokens:
         dataset: HF Dataset with 'question' and 'answer'
         val_start: Start index for the validation slice
         max_new_tokens: Generation budget
+        max_eval_samples: Maximum number of samples to evaluate (None = all)
 
     Returns:
         (avg_f1: float, em: float, total: int)
@@ -97,14 +100,28 @@ def evaluate_qa_model(model, tokenizer, dataset, val_start: int, max_new_tokens:
     f1_scores = []
     exact = 0
     total = 0
+    
+    # Limit evaluation samples to prevent hanging
+    end_idx = n
+    if max_eval_samples is not None:
+        end_idx = min(val_start + max_eval_samples, n)
+    
     with torch.no_grad():
-        for idx in range(val_start, n):
+        for idx in range(val_start, end_idx):
             q = str(dataset[idx]['question'])
             gold = str(dataset[idx]['answer'])
             prompt = f"### Human: {q}\n### Assistant:"
             inputs = tokenizer(prompt, return_tensors="pt")
             inputs = {k: v.to(model_device) for k, v in inputs.items()}
-            out = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+            out = model.generate(
+                **inputs, 
+                max_new_tokens=max_new_tokens, 
+                do_sample=False,
+                repetition_penalty=1.5,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                no_repeat_ngram_size=2
+            )
             decoded = tokenizer.decode(out[0], skip_special_tokens=True)
             pred = decoded.split("### Assistant:")[-1].strip()
             f1 = compute_token_f1(pred, gold)
@@ -189,8 +206,19 @@ def get_most_recent_model():
     if not model_dirs:
         return None
     
-    # Sort by modification time and return the most recent
-    most_recent = max(model_dirs, key=os.path.getmtime)
+    # Only consider directories that contain required adapter files
+    qualified_dirs = []
+    for d in model_dirs:
+        adapter_cfg = os.path.join(d, "adapter_config.json")
+        adapter_weights = os.path.join(d, "adapter_model.safetensors")
+        if os.path.isfile(adapter_cfg) and os.path.isfile(adapter_weights):
+            qualified_dirs.append(d)
+
+    if not qualified_dirs:
+        return None
+
+    # Sort by modification time and return the most recent qualified directory
+    most_recent = max(qualified_dirs, key=os.path.getmtime)
     return most_recent
 
 def list_available_models():
@@ -510,14 +538,19 @@ def preprocess_for_trainer(examples, tokenizer, seq_len: int = 512, dp_model: bo
             prompt_length = len(prompt_tokens["input_ids"])
             labels[i][:prompt_length] = [-100] * prompt_length
         
-    # Mask pad positions in labels to avoid computing loss on padding (only if attention_mask exists)
+    # Mask pad positions in labels to avoid computing loss on padding
+    pad_id = getattr(tokenizer, "pad_token_id", None)
     for i in range(len(labels)):
         am = model_inputs.get("attention_mask", None)
         if am is not None:
             for j, m in enumerate(am[i]):
                 if m == 0:
                     labels[i][j] = -100
-        # If no attention mask (DP-SGD mode), assume all tokens are valid for loss computation
+        elif pad_id is not None:
+            # Fallback for DP mode when attention_mask is not returned: mask by pad token id
+            for j, tok in enumerate(model_inputs["input_ids"][i]):
+                if tok == pad_id:
+                    labels[i][j] = -100
     model_inputs["labels"] = labels
     return model_inputs
 
@@ -537,6 +570,8 @@ def train_model(
     dp_data_epsilon: float = 1.0,
     qa: bool = True,
     seq_len: int = 512,
+    data_file: str | None = None,
+    lr: float | None = None,
 ):
     """Train the model with optional DP-SGD and/or DP data sampling.
 
@@ -579,12 +614,41 @@ def train_model(
     print(f"Model will be saved to: {adapter_path}")
     
     # Data selection strategy
+    # Use a single run-scoped timestamp for all artifacts (QA/data files) to avoid mismatches
+    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     data_dir = create_data_folder()
     if qa:
-        # For QA training, generate fresh synthetic data so names exist
-        print("\n1. Generating synthetic PHI data for QA training...")
-        phi_df = generate_phi_data(num_records=num_records, dp_data=False, dp_epsilon=dp_data_epsilon)
-        print(f"Generated {len(phi_df)} patient records (QA mode)")
+        # If a user-provided file is given, use it as the source for QA generation.
+        if data_file:
+            print(f"\n1. Loading user-provided data file for QA: {data_file}")
+            src_df = pd.read_csv(data_file)
+            # If the file is already QA format (question/answer), use it directly
+            if {'question','answer'}.issubset(set(map(str.lower, src_df.columns))):
+                # Normalize column names to expected casing
+                rename_map = {}
+                for c in src_df.columns:
+                    lc = c.lower()
+                    if lc == 'question':
+                        rename_map[c] = 'question'
+                    if lc == 'answer':
+                        rename_map[c] = 'answer'
+                src_df = src_df.rename(columns=rename_map)
+                qa_df = src_df[['question','answer']].copy()
+                dataset = Dataset.from_pandas(qa_df.reset_index(drop=True))
+                print(f"Loaded QA file with {len(qa_df)} rows")
+                phi_df = None
+            else:
+                # Expect a PHI-style table (e.g., name, condition, medication, medical_notes)
+                phi_df = src_df
+        else:
+            # In QA mode without user file, generate synthetic data
+            # Keep data-level DP off to avoid masking names used in QA
+            if dp_data:
+                print("\n[Note] qa=True requested without --file: disabling data-level DP to keep QA names aligned.")
+            dp_data = False
+            print("\n1. Generating synthetic PHI data for QA training...")
+            phi_df = generate_phi_data(num_records=num_records, dp_data=False, dp_epsilon=dp_data_epsilon)
+            print(f"Generated {len(phi_df)} patient records (QA mode)")
     else:
         # Check for encrypted data first, then generate if not available
         print("\n1. Checking for encrypted data...")
@@ -648,29 +712,30 @@ def train_model(
                 for q in notes_q_variants:
                     qa_rows.append({"question": q, "answer": notes})
 
-        qa_df = pd.DataFrame(qa_rows)
-        # Keep only short answers (e.g., diagnosis/medication), drop long-note rows
-        qa_df = qa_df[qa_df["answer"].astype(str).str.len() <= 64].reset_index(drop=True)
-        print(f"Built {len(qa_df)} QA pairs for training (filtered to short answers)")
-        dataset = Dataset.from_pandas(qa_df)
-        
-        # Save QA pairs to see what the model is actually training on
-        data_dir = create_data_folder()
-        qa_filename = f"QA_pairs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        qa_path = os.path.join(data_dir, qa_filename)
-        qa_df.to_csv(qa_path, index=False)
-        print(f"🎯 QA pairs saved to: {qa_path}")
-        print("📋 Sample QA pairs:")
-        for i, row in qa_df.head(3).iterrows():
-            print(f"   Q: {row['question']}")
-            print(f"   A: {row['answer']}")
-            print()
+        if 'dataset' not in locals():
+            qa_df = pd.DataFrame(qa_rows)
+            # Keep only short answers (e.g., diagnosis/medication), drop long-note rows
+            qa_df = qa_df[qa_df["answer"].astype(str).str.len() <= 64].reset_index(drop=True)
+            print(f"Built {len(qa_df)} QA pairs for training (filtered to short answers)")
+            dataset = Dataset.from_pandas(qa_df)
+            
+            # Save QA pairs for traceability
+            data_dir = create_data_folder()
+            qa_filename = f"QA_pairs_{run_timestamp}.csv"
+            qa_path = os.path.join(data_dir, qa_filename)
+            qa_df.to_csv(qa_path, index=False)
+            print(f"🎯 QA pairs saved to: {qa_path}")
+            print("📋 Sample QA pairs:")
+            for i, row in qa_df.head(3).iterrows():
+                print(f"   Q: {row['question']}")
+                print(f"   A: {row['answer']}")
+                print()
     else:
         dataset = Dataset.from_pandas(phi_df)
     
-    # Save data files to data folder
+    # Save data files to data folder (use same run timestamp to keep artifacts aligned)
     data_dir = create_data_folder()
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = run_timestamp
     
     if dp_data:
         # Save both original and DP-protected versions when DP is enabled
@@ -813,7 +878,28 @@ def train_model(
     TARGET_DELTA = float(dp_delta)
     MAX_GRAD_NORM = float(dp_max_grad_norm)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
+    # Effective learning rate: allow CLI override, else use DP-aware default
+    effective_lr = float(lr) if lr is not None else (1e-5 if dp_model else 5e-5)
+
+    # Guardrail hints for DP configurations to avoid collapsed learning
+    if dp_model:
+        if batch_size < 2:
+            print("WARNING: DP-SGD with batch_size < 2 often degrades learning. Consider --batch_size >= 2.")
+        if epochs < 2:
+            print("WARNING: DP-SGD with epochs < 2 may be insufficient. Consider --epochs >= 2.")
+        if MAX_GRAD_NORM <= 0.1:
+            print("WARNING: dp-max-grad-norm is very small (<=0.1). Consider --dp-max-grad-norm 0.5..1.0 to avoid over-clipping.")
+        if lr is None and effective_lr == 1e-5:
+            print("INFO: Using DP-aware default learning rate lr=1e-5 for --dp-model.")
+
+    # Use AdamW for better convergence (DP-Adam)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=effective_lr,
+        betas=(0.9, 0.999),  # Standard Adam betas
+        eps=1e-8,
+        weight_decay=0.01
+    )
 
     # Create torch DataLoader for Opacus
     print("8. Building DataLoader for DP training...")
@@ -905,10 +991,10 @@ def train_model(
                 total=len(train_loader),
                 desc=f"Epoch {epoch + 1}/{epochs}",
                 unit="batch",
-                ascii=True,
-                dynamic_ncols=True,
-                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt:>4}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
-                ncols=100,
+                ascii="#-",
+                dynamic_ncols=False,
+                bar_format='{desc}: {percentage:3.0f}%|{bar:40}| {n_fmt:>4}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+                ncols=80,
                 leave=False,
             )
             if tqdm
@@ -943,7 +1029,7 @@ def train_model(
                     model = model.to("cpu")
                     model_device = next(model.parameters()).device
                     # Recreate optimizer for new device
-                    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
+                    optimizer = torch.optim.AdamW(model.parameters(), lr=effective_lr)
                     # Move current batch to CPU and retry once
                     input_ids = input_ids.to(model_device)
                     attention_mask = attention_mask.to(model_device)
@@ -969,7 +1055,7 @@ def train_model(
                         dp_enabled = False
                         # Unwrap Opacus GradSampleModule to restore plain nn.Module
                         model = _unwrap_opacus(model)
-                        optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
+                        optimizer = torch.optim.AdamW(model.parameters(), lr=effective_lr)
                         # Rebuild non-DP dataloader
                         train_loader = DataLoader(torch_dataset, batch_size=batch_size, shuffle=True, drop_last=False, pin_memory=use_pin_memory)
                     except Exception:
@@ -1007,12 +1093,19 @@ def train_model(
         if qa and 'question' in dataset.column_names and 'answer' in dataset.column_names:
             n = len(dataset)
             if n >= 10:
+                print("Running quick evaluation...")
                 # If DP-SGD was enabled, unwrap Opacus' GradSampleModule for generation
                 model_for_eval = _unwrap_opacus(model) if 'dp_enabled' in locals() and dp_enabled else model
                 val_start = max(0, int(n * 0.9))
-                avg_f1, em, total = evaluate_qa_model(model_for_eval, tokenizer, dataset, val_start, max_new_tokens=48)
+                # Limit evaluation to first 5 examples to prevent hanging
+                eval_size = min(5, n - val_start)
+                avg_f1, em, total = evaluate_qa_model(model_for_eval, tokenizer, dataset, val_start, max_new_tokens=24, max_eval_samples=eval_size)
                 if total > 0:
-                    print(f"\n📈 Quick Eval on held-out {total} QA examples: F1={avg_f1:.3f}, EM={em:.3f}")
+                    print(f"\n📈 Quick Eval on {total} QA examples: F1={avg_f1:.3f}, EM={em:.3f}")
+                else:
+                    print("(Eval completed but no valid samples)")
+    except KeyboardInterrupt:
+        print("(Eval skipped due to interrupt)")
     except Exception as e:
         print(f"(Eval skipped due to error: {e})")
 
@@ -1032,9 +1125,16 @@ def train_model(
             model = _unwrap_opacus(model)
         except Exception:
             pass
+    # Ensure target directory exists before saving
+    try:
+        os.makedirs(adapter_path, exist_ok=True)
+    except Exception:
+        pass
+
     # Prefer skipping model card creation to avoid missing template errors
     try:
-        model.save_pretrained(adapter_path, create_model_card=False)
+        # Request safe serialization; PEFT will write adapter_model.safetensors
+        model.save_pretrained(adapter_path, create_model_card=False, safe_serialization=True)
     except TypeError:
         # Older PEFT may not support create_model_card. Try providing a local template.
         try:
@@ -1049,9 +1149,9 @@ def train_model(
             local_tpl = None
         try:
             if local_tpl:
-                model.save_pretrained(adapter_path, model_card_template_path=local_tpl)
+                model.save_pretrained(adapter_path, model_card_template_path=local_tpl, safe_serialization=True)
             else:
-                model.save_pretrained(adapter_path)
+                model.save_pretrained(adapter_path, safe_serialization=True)
         except FileNotFoundError as e:
             print(f"WARNING: Model card template missing; saving adapter without card. Details: {e}")
             # As a last resort, write a minimal README to the adapter dir
@@ -1061,6 +1161,25 @@ def train_model(
                     f.write("Adapter saved. Model card generation skipped due to missing template.")
             except Exception:
                 pass
+
+    # Post-save verification: ensure adapter files exist
+    try:
+        cfg_ok = os.path.isfile(os.path.join(adapter_path, "adapter_config.json"))
+        weights_ok = os.path.isfile(os.path.join(adapter_path, "adapter_model.safetensors"))
+        if not (cfg_ok and weights_ok):
+            print("WARNING: Adapter files missing after save; retrying once...")
+            # Retry a plain save call as a fallback
+            try:
+                model.save_pretrained(adapter_path)
+            except Exception as e:
+                print(f"WARNING: Retry save_pretrained failed: {e}")
+            # Recheck
+            cfg_ok = os.path.isfile(os.path.join(adapter_path, "adapter_config.json"))
+            weights_ok = os.path.isfile(os.path.join(adapter_path, "adapter_model.safetensors"))
+            if not (cfg_ok and weights_ok):
+                print("ERROR: Adapter files not found after saving. Please rerun training or check write permissions.")
+    except Exception as e:
+        print(f"WARNING: Post-save verification failed: {e}")
     print(f"Model saved to: {adapter_path}")
     
     return adapter_path
@@ -1068,7 +1187,7 @@ def train_model(
 # ======================================================================================
 # QUERY FUNCTION
 # ======================================================================================
-def query_model(model_path=None, prompt: str | None = None, context_csv: str | None = None, patient: str | None = None, use_trained_data: bool = False):
+def query_model(model_path=None, prompt: str | None = None, context_csv: str | None = None, patient: str | None = None, use_trained_data: bool = False, gen_beams: int = 3, gen_max_new_tokens: int = 30):
     """Query the model interactively or in one-shot mode.
 
     Args:
@@ -1196,12 +1315,32 @@ def query_model(model_path=None, prompt: str | None = None, context_csv: str | N
         with torch.no_grad():
             outputs = finetuned_model.generate(
                 **inputs,
-                max_new_tokens=80,
-                do_sample=False
+                max_new_tokens=int(gen_max_new_tokens),
+                do_sample=False,
+                num_beams=int(gen_beams),
+                early_stopping=True,
+                repetition_penalty=1.5,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                no_repeat_ngram_size=2
             )
         full = tokenizer.decode(outputs[0], skip_special_tokens=True)
         answer = full.split("### Assistant:")[-1].strip()
-        print(answer)
+        
+        # Clean up repetitive patterns
+        lines = answer.split('\n')
+        cleaned_lines = []
+        seen = set()
+        for line in lines:
+            line = line.strip()
+            if line and line not in seen and not line.startswith('#'):
+                cleaned_lines.append(line)
+                seen.add(line)
+                if len(cleaned_lines) >= 3:  # Limit to 3 lines max
+                    break
+        
+        final_answer = '\n'.join(cleaned_lines) if cleaned_lines else answer.split('\n')[0]
+        print(final_answer)
         return
 
     print("Model loaded! Enter your questions (type 'quit' to exit)")
@@ -1239,15 +1378,34 @@ def query_model(model_path=None, prompt: str | None = None, context_csv: str | N
         with torch.no_grad():
             outputs = finetuned_model.generate(
                 **inputs,
-                max_new_tokens=80,
-                do_sample=False
+                max_new_tokens=int(gen_max_new_tokens),
+                do_sample=False,
+                num_beams=int(gen_beams),
+                early_stopping=True,
+                repetition_penalty=1.5,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                no_repeat_ngram_size=2
             )
         
         # Decode response
         response = tokenizer.decode(outputs[0], skip_special_tokens=True)
         assistant_part = response.split("### Assistant:")[1].strip() if "### Assistant:" in response else response
         
-        print(f"Model response: {assistant_part}")
+        # Clean up repetitive patterns
+        lines = assistant_part.split('\n')
+        cleaned_lines = []
+        seen = set()
+        for line in lines:
+            line = line.strip()
+            if line and line not in seen and not line.startswith('#'):
+                cleaned_lines.append(line)
+                seen.add(line)
+                if len(cleaned_lines) >= 3:  # Limit to 3 lines max
+                    break
+        
+        final_answer = '\n'.join(cleaned_lines) if cleaned_lines else assistant_part.split('\n')[0]
+        print(f"Model response: {final_answer}")
 
 def create_original_phi_data(num_records=100):
     """Generate an ORIGINAL PHI/PII dataset (intended for DP processing).
@@ -1454,6 +1612,16 @@ def clean_all_data_and_models():
     print("=" * 60)
     
     deleted_count = 0
+    deletion_errors: list[str] = []
+
+    # Helper to remove read-only flags and retry
+    def _onerror(func, path, exc_info):
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except Exception as e:
+            deletion_errors.append(f"{path}: {e}")
+            print(f"❌ Error deleting {path}: {e}")
     
     # Clean data folder
     data_dir = "data"
@@ -1465,21 +1633,33 @@ def clean_all_data_and_models():
                 print(f"🗑️ Deleted data file: {os.path.basename(file_path)}")
                 deleted_count += 1
             except Exception as e:
+                deletion_errors.append(f"{file_path}: {e}")
                 print(f"❌ Error deleting {file_path}: {e}")
     
     # Clean models folder
     models_dir = "models"
     if os.path.exists(models_dir):
         model_dirs = glob.glob(os.path.join(models_dir, "vaultgemma_dp_*"))
+        # Retry deletions a few times to avoid transient locks on Windows
         for model_dir in model_dirs:
-            try:
-                shutil.rmtree(model_dir)
-                print(f"🗑️ Deleted model directory: {os.path.basename(model_dir)}")
-                deleted_count += 1
-            except Exception as e:
-                print(f"❌ Error deleting {model_dir}: {e}")
+            for attempt in range(3):
+                try:
+                    shutil.rmtree(model_dir, onerror=_onerror)
+                    print(f"🗑️ Deleted model directory: {os.path.basename(model_dir)}")
+                    deleted_count += 1
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        time.sleep(0.5)
+                        continue
+                    deletion_errors.append(f"{model_dir}: {e}")
+                    print(f"❌ Error deleting {model_dir}: {e}")
     
     print(f"\n✅ Cleanup completed! Deleted {deleted_count} files/directories")
+    if deletion_errors:
+        print("⚠️ Some items could not be deleted due to locks/permissions:")
+        for err in deletion_errors:
+            print(f"   - {err}")
     print("=" * 60)
 
 # ======================================================================================
@@ -1512,6 +1692,11 @@ Flags and examples:
       %(prog)s --train
       %(prog)s --train --records 100 --epochs 2
       %(prog)s --train --records 20 --batch_size 2
+
+  Recommended DP-SGD (stability)
+    %(prog)s --train --dp-model \
+      --records 1500 --epochs 4 --batch_size 4 --seq-len 192 \
+      --dp-max-grad-norm 1.0 --dp-eps 8 --lr 1e-5 --qa --gpu
 
   Accuracy-focused training (quick start):
     CPU, higher accuracy (disable extra DP-SGD; base model already DP):
@@ -1604,6 +1789,14 @@ Flags and examples:
                        help="Query the most recent model. Example: %(prog)s --query")
     parser.add_argument("--prompt", type=str,
                        help="One-shot prompt to ask the model, then exit. Example: %(prog)s --query --prompt 'What are the medical notes for Timothy Green?'")
+    parser.add_argument("--lr", type=float,
+                       help="Learning rate override. If omitted: 1e-5 when --dp-model else 5e-5.")
+    parser.add_argument("--gen-beams", type=int, default=3,
+                       help="Generation beams (default: 3). Use 1 for stricter, shorter answers.")
+    parser.add_argument("--gen-max-new-tokens", type=int, default=30,
+                       help="Max new tokens to generate (default: 30). Reduce to 3–8 for short QA.")
+    parser.add_argument("--file", type=str,
+                       help="Path to a user-provided CSV file for training data. With --qa, auto-generates QA from this file. If the file already has 'question' and 'answer' columns, uses it directly.")
     parser.add_argument("--context-csv", type=str,
                        help="CSV file to use as retrieval context (e.g., ORIGINAL_phi_data_*.csv)")
     parser.add_argument("--patient", type=str,
@@ -1696,6 +1889,8 @@ Flags and examples:
             dp_data_epsilon=args.dp_data_eps,
             qa=args.qa,
             seq_len=args.__dict__.get('seq_len', 512),
+            data_file=args.file,
+            lr=args.lr,
         )
         if model_path:
             print("\nTraining completed successfully!")
@@ -1712,6 +1907,8 @@ Flags and examples:
             context_csv=args.context_csv,
             patient=args.patient,
             use_trained_data=args.use_trained_data,
+            gen_beams=args.gen_beams,
+            gen_max_new_tokens=args.gen_max_new_tokens,
         )
     
     elif args.list:

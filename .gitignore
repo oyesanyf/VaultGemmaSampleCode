@@ -1,3 +1,47 @@
+# ====================================================================
+# LLM Differential Privacy - .gitignore
+# ====================================================================
+
+# ============================================================
+# SENSITIVE DATA - NEVER COMMIT
+# ============================================================
+# Data files (contains PHI/PII - synthetic or real)
+data/
+data/*.csv
+data/**/*.csv
+*.csv
+
+# Trained models (large files)
+models/
+models/**/*
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Hugging Face token
+.env
+.env.local
+HF_TOKEN
+
+# ============================================================
+# PYTHON VIRTUAL ENVIRONMENTS
+# ============================================================
+# Virtual environment folders
+dp_env/
+venv/
+env/
+ENV/
+.venv/
+.virtualenv/
+
+# Conda environments
+conda-meta/
+.conda/
+
+# ============================================================
+# PYTHON CACHE & COMPILED FILES
+# ============================================================
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -20,6 +64,7 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
@@ -27,15 +72,110 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# ============================================================
+# ML/AI SPECIFIC
+# ============================================================
+# Hugging Face cache
+.cache/
+huggingface/
+.huggingface/
+transformers_cache/
 
+# PyTorch
+*.pth
+*.ckpt
+checkpoint/
+checkpoints/
+
+# TensorBoard
+runs/
+logs/
+tensorboard/
+
+# Weights & Biases
+wandb/
+
+# MLflow
+mlruns/
+
+# Opacus cache
+.opacus_cache/
+
+# ============================================================
+# JUPYTER NOTEBOOKS
+# ============================================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+*.ipynb
+
+# Jupyter Notebook config
+.jupyter/
+
+# ============================================================
+# IDE & EDITOR FILES
+# ============================================================
+# VSCode
+.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Cursor
+.cursor/
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.*.swp
+.*.swo
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# ============================================================
+# OS-SPECIFIC FILES
+# ============================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+
+# ============================================================
+# TESTING & COVERAGE
+# ============================================================
 # Unit test / coverage reports
 htmlcov/
 .tox/
@@ -46,335 +186,152 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
 *.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+.pytest_cache/
 
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
+# ============================================================
+# DOCUMENTATION
+# ============================================================
 # Sphinx documentation
 docs/_build/
+docs/_static/
+docs/_templates/
 
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/#use-with-ide
-.pdm.toml
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-dp_env/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#  JetBrains specific template is maintained in a separate jetbrains.gitignore that can
-#  be added to the global gitignore or merged into this project gitignore.  For a PyCharm
-#  project, it is recommended to include the following files:
-#  .idea/
-#  *.iml
-#  *.ipr
-#  *.iws
-.idea/
-*.iml
-*.ipr
-*.iws
-
-# VS Code
-.vscode/
-*.code-workspace
-
-# Local History for Visual Studio Code
-.history/
-
-# Windows
-Thumbs.db
-Thumbs.db:encryptable
-ehthumbs.db
-ehthumbs_vista.db
-*.tmp
-*.temp
-*.swp
-*.swo
-*~
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-Icon
-._*
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-.AppleDB
-.AppleDesktop
-Network Trash Folder
-Temporary Items
-.apdisk
-
-# Linux
-*~
-.fuse_hidden*
-.directory
-.Trash-*
-.nfs*
-
-# Project-specific files
-# Data files (contains sensitive PHI/PII)
-data/ORIGINAL_phi_data_*.csv
-data/DP_ENCRYPTED_phi_data_*.csv
-data/synthetic_phi_data_*.csv
-data/QA_pairs_*.csv
-
-# Model files (large binary files)
-models/
-*.bin
-*.safetensors
-*.pt
-*.pth
-*.ckpt
-
-# Hugging Face cache
-.cache/
-huggingface/
-
-# Jupyter notebook checkpoints
-.ipynb_checkpoints/
-
-# Logs
-*.log
-logs/
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-*.temp
-
-# OS generated files
-.DS_Store?
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# IDE files
-*.swp
-*.swo
-*~
-
+# ============================================================
+# BACKUP & TEMP FILES
+# ============================================================
 # Backup files
 *.bak
 *.backup
 *.old
+*.orig
+*.tmp
+*~
 
-# Security and secrets
+# Temporary files
+tmp/
+temp/
+*.temp
+
+# Log files
+*.log
+logs/
+
+# ============================================================
+# PROJECT-SPECIFIC
+# ============================================================
+# Adapter directories (if you want to keep only specific ones)
+phi-vaultgemma-finetuned-adapter-dp/adapter_model.safetensors
+# Uncomment if you want to ignore all adapters:
+# *adapter*/
+
+# Model card templates (auto-generated)
+modelcard_template.md
+
+# Test result files
+test_results/
+test_output/
+
+# Synthetic data timestamp files
+synthetic_phi_data_*.csv
+ORIGINAL_phi_data_*.csv
+DP_ENCRYPTED_phi_data_*.csv
+QA_pairs_*.csv
+
+# ============================================================
+# SECURITY & CREDENTIALS
+# ============================================================
+# Environment variables
 .env
-.env.local
-.env.*.local
-secrets.json
-config.json
+.env.*
+!.env.example
+
+# Credentials
+credentials.json
+secrets.yaml
 *.key
 *.pem
 *.crt
+*.cer
 *.p12
 
-# Performance and profiling
-*.prof
-*.profile
-*.pstats
+# API keys
+api_keys.txt
+*.token
 
-# Memory dumps
-*.dmp
-*.hprof
+# SSH keys
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
 
-# Coverage reports
-htmlcov/
-.coverage
-coverage.xml
-*.cover
+# ============================================================
+# PACKAGE MANAGER
+# ============================================================
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Test artifacts
-.pytest_cache/
-.tox/
-.nox/
+# Poetry
+poetry.lock
 
-# Documentation builds
-docs/_build/
-docs/build/
+# Pipenv
+Pipfile.lock
 
-# Package builds
-build/
-dist/
-*.egg-info/
-
-# Virtual environments
-venv/
-env/
-ENV/
-dp_env/
-.venv/
-.env/
-
-# PyCharm
-.idea/
-
-# VS Code
-.vscode/
-
-# Sublime Text
-*.sublime-project
-*.sublime-workspace
-
-# Vim
-*.swp
-*.swo
-*~
-
-# Emacs
-*~
-\#*\#
-/.emacs.desktop
-/.emacs.desktop.lock
-*.elc
-auto-save-list
-tramp
-.\#*
-
-# Local configuration
-local_config.py
-config_local.py
-settings_local.py
-
+# ============================================================
+# MISCELLANEOUS
+# ============================================================
 # Database files
 *.db
 *.sqlite
 *.sqlite3
 
-# Large files that shouldn't be in version control
+# Compressed files
 *.zip
 *.tar.gz
 *.rar
 *.7z
 
-# Machine learning specific
-checkpoints/
-runs/
-wandb/
-mlruns/
-.neptune/
+# Large binary files
+*.mp4
+*.avi
+*.mov
+*.pdf
 
-# Differential Privacy specific
-privacy_reports/
-dp_analysis/
-sensitivity_analysis/
+# ============================================================
+# KEEP THESE FILES (NEGATIONS)
+# ============================================================
+# Keep README and documentation
+!README.md
+!CHANGELOG.md
+!CONTRIBUTING.md
+!LICENSE
+!SECURITY.md
 
-# Model evaluation results
-evaluation_results/
-model_metrics/
-performance_logs/
+# Keep requirements
+!requirements.txt
 
-# Generated documentation
-docs/generated/
-api_docs/
+# Keep setup files
+!setup.py
+!pyproject.toml
 
-# Local test data
-test_data/
-sample_data/
-demo_data/
+# Keep example configs
+!.env.example
+!config.example.yaml
 
-# Configuration files with sensitive data
-config.ini
-settings.ini
-secrets.ini
+# Keep GitHub workflows
+!.github/
+!.github/**/*
+
+# Keep test scripts
+!test_model_queries.py
+!*_tests.py
+
+# Keep batch scripts
+!*.bat
+!run_*.bat
+
+# Keep markdown docs
+!*.md
+!10_TEST_QUERIES.md
+!TEST_QUERIES.md
