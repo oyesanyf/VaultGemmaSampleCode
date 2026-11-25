@@ -47,7 +47,7 @@ jobs:
 
       - name: Run unit test suite
         run: |
-          pytest -v tests/
+          python -m pytest -v tests/
 
       - name: End-to-end CLI data encryption, listing, and cleanup
         run: |
