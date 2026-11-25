@@ -77,7 +77,14 @@ def compute_token_f1(pred: str, truth: str) -> float:
         return 0.0
     return 2 * precision * recall / (precision + recall)
 
-def evaluate_qa_model(model, tokenizer, dataset, val_start: int, max_new_tokens: int = 48, max_eval_samples: int = None):
+def evaluate_qa_model(
+    model,
+    tokenizer,
+    dataset,
+    val_start: int,
+    max_new_tokens: int = 48,
+    max_eval_samples: int | None = None,
+):
     """Compute EM and token-F1 on a held-out slice of a QA dataset.
 
     Args:
@@ -1506,8 +1513,8 @@ def apply_dp_to_data(df, epsilon=1.0):
         noisy_counts = {}
         for item, count in counts.items():
             # Laplace mechanism: add noise with scale = 1/epsilon
-            noise = np.random.laplace(0, 1/epsilon)
-            noisy_count = max(0, count + noise)  # Ensure non-negative
+            noise = np.random.laplace(0, 1 / max(epsilon, 1e-6))
+            noisy_count = max(1e-6, count + noise)  # Ensure strictly positive for normalization
             noisy_counts[item] = noisy_count
         return noisy_counts
     
