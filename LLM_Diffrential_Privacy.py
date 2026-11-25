@@ -1157,9 +1157,10 @@ def train_model(
             os.makedirs(os.path.dirname(os.path.join(adapter_path, "..")), exist_ok=True)
         except Exception:
             pass
-        local_tpl: str | None = os.path.join(os.getcwd(), "modelcard_template.md")
+        tpl_path = os.path.join(os.getcwd(), "modelcard_template.md")
+        local_tpl: str | None = tpl_path
         try:
-            with open(local_tpl, "w", encoding="utf-8") as f:
+            with open(tpl_path, "w", encoding="utf-8") as f:
                 f.write("# Adapter Card\n\nThis adapter was saved locally. Model card generation was minimized.")
         except Exception:
             local_tpl = None
