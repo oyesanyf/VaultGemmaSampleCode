@@ -19,6 +19,7 @@ import os
 import random
 import re
 import shutil
+from typing import Any
 import warnings
 from datetime import datetime
 
@@ -672,7 +673,7 @@ def train_model(
             print(f"Generated {len(phi_df)} patient records")
     
     # If QA mode, build question/answer pairs
-    if qa:
+    if qa and phi_df is not None:
         # Build a larger, paraphrased QA set per record to improve accuracy even with few records
         qa_rows = []
         for _, r in phi_df.iterrows():
@@ -737,14 +738,14 @@ def train_model(
                 print(f"   Q: {row['question']}")
                 print(f"   A: {row['answer']}")
                 print()
-    else:
+    elif phi_df is not None:
         dataset = Dataset.from_pandas(phi_df)
     
     # Save data files to data folder (use same run timestamp to keep artifacts aligned)
     data_dir = create_data_folder()
     timestamp = run_timestamp
     
-    if dp_data:
+    if phi_df is not None and dp_data:
         # Save both original and DP-protected versions when DP is enabled
         original_filename = f"ORIGINAL_phi_data_{timestamp}.csv"
         original_path = os.path.join(data_dir, original_filename)
@@ -758,7 +759,7 @@ def train_model(
         dp_protected_df.to_csv(dp_path, index=False)
         print(f"🟢 DP-protected data saved to: {dp_path}")
         print(f"🔒 Privacy protection: ε={dp_data_epsilon}")
-    else:
+    elif phi_df is not None:
         # Save regular synthetic data when DP is disabled
         data_filename = f"synthetic_phi_data_{timestamp}.csv"
         data_path = os.path.join(data_dir, data_filename)
@@ -770,9 +771,17 @@ def train_model(
     base_model_id = "google/vaultgemma-1b"
     # Prefer fast tokenizer; fall back to slow if conversion fails
     try:
-        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            base_model_id,
+            revision="f9624dafc1760cb2f6039e86e12055d6559d7abb",
+            use_fast=True,
+        )
     except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(
+            base_model_id,
+            revision="f9624dafc1760cb2f6039e86e12055d6559d7abb",
+            use_fast=False,
+        )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = 'right'
@@ -805,12 +814,12 @@ def train_model(
     # Set the attention implementation mode to eager, which is compatible with Opacus
     attn_mode = "eager" if dp_model else None
     
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model_id, 
+    model: Any = AutoModelForCausalLM.from_pretrained(
+        base_model_id,
+        revision="f9624dafc1760cb2f6039e86e12055d6559d7abb",
         dtype=torch.float32,
         # Pass the mode directly here. This is the most reliable way to set it.
         attn_implementation=attn_mode,
-        trust_remote_code=True,
     )
     # --- Force eager attention environment variables only if DP-SGD is enabled ---
     if dp_model:
@@ -1148,7 +1157,7 @@ def train_model(
             os.makedirs(os.path.dirname(os.path.join(adapter_path, "..")), exist_ok=True)
         except Exception:
             pass
-        local_tpl = os.path.join(os.getcwd(), "modelcard_template.md")
+        local_tpl: str | None = os.path.join(os.getcwd(), "modelcard_template.md")
         try:
             with open(local_tpl, "w", encoding="utf-8") as f:
                 f.write("# Adapter Card\n\nThis adapter was saved locally. Model card generation was minimized.")
@@ -1255,16 +1264,28 @@ def query_model(model_path=None, prompt: str | None = None, context_csv: str | N
     base_model_id = "google/vaultgemma-1b"
     # Prefer fast tokenizer; fall back to slow if conversion fails
     try:
-        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            base_model_id,
+            revision="f9624dafc1760cb2f6039e86e12055d6559d7abb",
+            use_fast=True,
+        )
     except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(
+            base_model_id,
+            revision="f9624dafc1760cb2f6039e86e12055d6559d7abb",
+            use_fast=False,
+        )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
     device = torch.device(SELECTED_DEVICE if (SELECTED_DEVICE == "cpu" or (SELECTED_DEVICE == "cuda" and torch.cuda.is_available())) else ("cuda" if torch.cuda.is_available() else "cpu"))
-    base_model = AutoModelForCausalLM.from_pretrained(base_model_id, dtype=torch.float32, trust_remote_code=True)
+    base_model: Any = AutoModelForCausalLM.from_pretrained(
+        base_model_id,
+        revision="f9624dafc1760cb2f6039e86e12055d6559d7abb",
+        dtype=torch.float32,
+    )
     base_model = base_model.to(device)
-    finetuned_model = PeftModel.from_pretrained(base_model, model_path)
+    finetuned_model: Any = PeftModel.from_pretrained(base_model, model_path, local_files_only=True)
     finetuned_model = finetuned_model.to(device)
 
     # Optionally prepare retrieval-augmented context
@@ -1331,7 +1352,7 @@ def query_model(model_path=None, prompt: str | None = None, context_csv: str | N
                 eos_token_id=tokenizer.eos_token_id,
                 no_repeat_ngram_size=2
             )
-        full = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        full = str(tokenizer.decode(outputs[0], skip_special_tokens=True))
         answer = full.split("### Assistant:")[-1].strip()
         
         # Clean up repetitive patterns
@@ -1396,7 +1417,7 @@ def query_model(model_path=None, prompt: str | None = None, context_csv: str | N
             )
         
         # Decode response
-        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response = str(tokenizer.decode(outputs[0], skip_special_tokens=True))
         assistant_part = response.split("### Assistant:")[1].strip() if "### Assistant:" in response else response
         
         # Clean up repetitive patterns

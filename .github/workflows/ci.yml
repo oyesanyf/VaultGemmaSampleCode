@@ -82,8 +82,12 @@ jobs:
 
       - name: Security scan with bandit
         run: |
+          set +e
           bandit -r LLM_Diffrential_Privacy.py test_model_queries.py setup.py -ll -f json -o bandit-report.json
+          rc=$?
+          set -e
           cat bandit-report.json
+          exit $rc
 
   build:
     runs-on: ubuntu-latest
